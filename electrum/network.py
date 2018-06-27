@@ -234,6 +234,7 @@ class Network(PrintError):
                            deserialize_proxy(self.config.get('proxy')))
         self.asyncio_loop = asyncio.get_event_loop()
         # lightning network
+        self.lightning_nodes = {}
         self.channel_db = lnrouter.ChannelDB()
         self.path_finder = lnrouter.LNPathFinder(self.channel_db)
         self.lnwatcher = lnwatcher.LNWatcher(self)
