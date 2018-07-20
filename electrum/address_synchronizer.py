@@ -34,7 +34,6 @@ from .synchronizer import Synchronizer
 from .verifier import SPV
 from .blockchain import hash_header
 from .i18n import _
-from .lnworker import LNWorker
 
 TX_HEIGHT_LOCAL = -2
 TX_HEIGHT_UNCONF_PARENT = -1
@@ -85,6 +84,9 @@ class AddressSynchronizer(PrintError):
         self.check_history()
         self.load_unverified_transactions()
         self.remove_local_transactions_we_dont_have()
+
+    def synchronize(sellf):
+        pass
 
     def is_mine(self, address):
         return address in self.history
@@ -142,7 +144,6 @@ class AddressSynchronizer(PrintError):
             self.verifier = SPV(self.network, self)
             self.synchronizer = Synchronizer(self, network)
             network.add_jobs([self.verifier, self.synchronizer])
-            self.lnworker = LNWorker(self, network)
         else:
             self.verifier = None
             self.synchronizer = None

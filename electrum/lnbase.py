@@ -937,6 +937,9 @@ class Peer(PrintError):
         data = commitment_signed_msg["htlc_signature"]
         htlc_sigs = [data[i:i+64] for i in range(0, len(data), 64)]
         m.receive_new_commitment(commitment_signed_msg["signature"], htlc_sigs)
+
+        self.lnwatcher.add_sweep_ctx(m)
+
         return len(htlc_sigs)
 
     @aiosafe

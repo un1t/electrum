@@ -18,7 +18,6 @@ from .ecc import der_sig_from_sig_string
 from .lnhtlc import HTLCStateMachine
 from .lnutil import (Outpoint, calc_short_channel_id, LNPeerAddr, get_compressed_pubkey_from_bech32,
                      PaymentFailure)
-from .lnwatcher import LNChanCloseHandler
 from .i18n import _
 
 
@@ -35,6 +34,7 @@ class LNWorker(PrintError):
 
     def __init__(self, wallet, network):
         self.wallet = wallet
+        self.sweep_address = wallet.get_receiving_address()
         self.network = network
         self.channel_db = self.network.channel_db
         self.lock = threading.RLock()
@@ -50,7 +50,7 @@ class LNWorker(PrintError):
         self.channels = {x.channel_id: x for x in map(HTLCStateMachine, wallet.storage.get("channels", []))}
         self.invoices = wallet.storage.get('lightning_invoices', {})
         for chan_id, chan in self.channels.items():
-            self.network.lnwatcher.watch_channel(chan, self.on_channel_utxos)
+            self.network.lnwatcher.watch_channel(chan, self.sweep_address, self.on_channel_utxos)
         self._last_tried_peer = {}  # LNPeerAddr -> unix timestamp
         self._add_peers_from_config()
         # wait until we see confirmations
@@ -125,8 +125,6 @@ class LNWorker(PrintError):
             chan.set_funding_txo_spentness(True)
             chan.set_state("CLOSED")
             self.channel_db.remove_channel(chan.short_channel_id)
-            # FIXME is this properly GC-ed? (or too soon?)
-            LNChanCloseHandler(self.network, self.wallet, chan)
         else:
             chan.set_funding_txo_spentness(False)
         self.network.trigger_callback('channel', chan)
@@ -166,7 +164,7 @@ class LNWorker(PrintError):
             self.print_error("Channel_establishment_flow returned None")
             return
         self.save_channel(openingchannel)
-        self.network.lnwatcher.watch_channel(openingchannel, self.on_channel_utxos)
+        self.network.lnwatcher.watch_channel(openingchannel, self.sweep_address, self.on_channel_utxos)
         self.on_channels_updated()
 
     def on_channels_updated(self):
