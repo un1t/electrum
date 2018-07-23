@@ -670,6 +670,10 @@ class Network(PrintError):
             return False, "error: " + out
         return True, out
 
+    async def get_txid_from_txpos(self, tx_height, tx_pos, merkle):
+        command = 'blockchain.transaction.id_from_pos'
+        return await self.interface.session.send_request(command, [tx_height, tx_pos, merkle])
+
     async def request_chunk(self, height, tip, session=None, can_return_early=False):
         if session is None: session = self.interface.session
         index = height // 2016
