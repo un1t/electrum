@@ -23,7 +23,7 @@
 import binascii
 import os, sys, re, json
 from collections import defaultdict
-from typing import NamedTuple
+from typing import NamedTuple, Union, Sequence
 from datetime import datetime
 import decimal
 from decimal import Decimal
@@ -37,12 +37,13 @@ from locale import localeconv
 import asyncio
 import urllib.request, urllib.parse, urllib.error
 import queue
+import ipaddress
+
+from .i18n import _
 
 import aiohttp
 from aiohttp_socks import SocksConnector, SocksVer
 from aiorpcx import TaskGroup
-
-from .i18n import _
 
 
 def inv_dict(d):
@@ -985,7 +986,6 @@ def make_aiohttp_session(proxy):
     else:
         return aiohttp.ClientSession(headers={'User-Agent' : 'Electrum'}, timeout=aiohttp.ClientTimeout(total=10))
 
-
 class CustomTaskGroup(TaskGroup):
 
     def spawn(self, *args, **kwargs):
@@ -993,3 +993,19 @@ class CustomTaskGroup(TaskGroup):
         if self._closed:
             raise asyncio.CancelledError()
         return super().spawn(*args, **kwargs)
+
+def is_ip_address(x: Union[str, bytes]) -> bool:
+    if isinstance(x, bytes):
+        x = x.decode("utf-8")
+    try:
+        ipaddress.ip_address(x)
+        return True
+    except ValueError:
+        return False
+
+def list_enabled_bits(x: int) -> Sequence[int]:
+    """e.g. 77 (0b1001101) --> (0, 2, 3, 6)"""
+    binary = bin(x)[2:]
+    rev_bin = reversed(binary)
+    return tuple(i for i, b in enumerate(rev_bin) if b == '1')
+>>>>>>> persist nodes in channel_db on disk
