@@ -27,19 +27,19 @@ class FeeUpdateProgress(Enum):
     FUNDEE_SIGNED = auto()
     FUNDEE_ACKED =  auto()
     FUNDER_SIGNED = auto()
+    COMMITTED = auto()
 
 FUNDEE_SIGNED = FeeUpdateProgress.FUNDEE_SIGNED
 FUNDEE_ACKED = FeeUpdateProgress.FUNDEE_ACKED
 FUNDER_SIGNED = FeeUpdateProgress.FUNDER_SIGNED
+COMMITTED = FeeUpdateProgress.COMMITTED
 
 class FeeUpdate:
-
-    INITIAL = {FUNDEE_SIGNED: None, FUNDEE_ACKED: None, FUNDER_SIGNED: None}
 
     def __init__(self, chan, feerate):
         self.rate = feerate
         self.proposed = chan.remote_state.ctn if not chan.constraints.is_initiator else chan.local_state.ctn
-        self.progress = dict(self.INITIAL) # copy
+        self.progress = {FUNDEE_SIGNED: None, FUNDEE_ACKED: None, FUNDER_SIGNED: None, COMMITTED: None}
         self.chan = chan
 
     @property
@@ -50,7 +50,7 @@ class FeeUpdate:
         self.progress[field] = self.height
 
     def is_proposed(self):
-        return self.proposed is not None and self.proposed <= self.height
+        return self.progress[COMMITTED] is None and self.proposed is not None and self.proposed <= self.height
 
     def had(self, field):
         return self.progress[field] is not None and self.height >= self.progress[field]
@@ -58,22 +58,12 @@ class FeeUpdate:
     def pending_feerate(self, subject):
         if not self.is_proposed():
             return
-        if subject == REMOTE:
-            if self.chan.constraints.is_initiator and self.is_proposed() or self.had(FUNDEE_ACKED):
-                return self.rate
-        elif subject == LOCAL:
-            if not self.chan.constraints.is_initiator and self.is_proposed():
-                return self.rate
-            if self.chan.constraints.is_initiator and self.had(FUNDEE_ACKED):
-                return self.rate
-        else:
-            assert False
-
-    def clear(self):
-        self.rate = None
-        self.proposed = None
-        self.progress = dict(self.INITIAL)
-        self.chan = None
+        if self.had(FUNDEE_ACKED):
+            return self.rate
+        if subject == REMOTE and self.chan.constraints.is_initiator:
+            return self.rate
+        if subject == LOCAL and not self.chan.constraints.is_initiator:
+            return self.rate
 
 class UpdateAddHtlc:
     def __init__(self, amount_msat, payment_hash, cltv_expiry):
@@ -352,11 +342,11 @@ class HTLCStateMachine(PrintError):
         for pending_fee in self.fee_mgr:
             if not self.constraints.is_initiator and pending_fee.had(FUNDEE_SIGNED):
                 new_local_feerate = new_remote_feerate = pending_fee.rate
-                pending_fee.clear()
+                pending_fee.set(COMMITTED)
                 print("FEERATE CHANGE COMPLETE (non-initiator)")
             if self.constraints.is_initiator and pending_fee.had(FUNDER_SIGNED):
                 new_local_feerate = new_remote_feerate = pending_fee.rate
-                pending_fee.clear()
+                pending_fee.set(COMMITTED)
                 print("FEERATE CHANGE COMPLETE (initiator)")
 
         self.local_state=self.local_state._replace(
