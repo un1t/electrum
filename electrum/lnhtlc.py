@@ -591,7 +591,7 @@ class HTLCStateMachine(PrintError):
         self.print_error("receive_htlc_settle")
         htlc = self.lookup_htlc(self.log[LOCAL], htlc_index)
         assert htlc.payment_hash == sha256(preimage)
-        assert len([x.htlc_id == htlc_index for x in self.log[LOCAL]]) == 1
+        assert len([x for x in self.log[LOCAL] if x.htlc_id == htlc_index and type(x) is UpdateAddHtlc]) == 1, (self.log[LOCAL], htlc_index)
         self.log[REMOTE].append(SettleHtlc(htlc_index))
 
     def fail_htlc(self, htlc):
