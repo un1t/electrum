@@ -2,7 +2,7 @@
 from collections import namedtuple
 import binascii
 import json
-from enum import IntFlag
+from enum import IntFlag, Enum, auto
 
 from .util import bfh, PrintError, bh2u
 from .bitcoin import Hash
@@ -22,10 +22,10 @@ from .transaction import Transaction
 SettleHtlc = namedtuple("SettleHtlc", ["htlc_id"])
 RevokeAndAck = namedtuple("RevokeAndAck", ["per_commitment_secret", "next_per_commitment_point"])
 
-class FeeUpdateProgress(IntFlag):
-    FUNDEE_SIGNED = 1
-    FUNDEE_ACKED =  2
-    FUNDER_SIGNED = 4
+class FeeUpdateProgress(Enum):
+    FUNDEE_SIGNED = auto()
+    FUNDEE_ACKED =  auto()
+    FUNDER_SIGNED = auto()
 
 class HTLCOwner(IntFlag):
     LOCAL = 1
@@ -77,7 +77,6 @@ class FeeUpdate:
     def pending_remote_feerate(self):
         if self.chan.constraints.is_initiator and self.is_proposed() or self.is_fundee_acked():
             return self.rate
-        return self.chan.remote_state.feerate
 
     @property
     def pending_local_feerate(self):
@@ -85,7 +84,6 @@ class FeeUpdate:
             return self.rate
         if self.chan.constraints.is_initiator and self.is_fundee_acked():
             return self.rate
-        return self.chan.local_state.feerate
 
     def clear(self):
         self.rate = None
@@ -187,7 +185,7 @@ class HTLCStateMachine(PrintError):
 
         self.name = name
 
-        self.pending_fee = FeeUpdate(self)
+        self.fee_mgr = []
 
         self.local_commitment = self.pending_local_commitment
         self.remote_commitment = self.pending_remote_commitment
@@ -269,7 +267,7 @@ class HTLCStateMachine(PrintError):
 
         for_us = False
 
-        feerate = self.pending_fee.pending_remote_feerate
+        feerate = self.pending_remote_feerate
 
         htlcsigs = []
         for we_receive, htlcs in zip([True, False], [self.htlcs_in_remote, self.htlcs_in_local]):
@@ -287,11 +285,12 @@ class HTLCStateMachine(PrintError):
                 htlc_sig = ecc.sig_string_from_der_sig(sig[:-1])
                 htlcsigs.append(htlc_sig)
 
-        if self.pending_fee.is_proposed():
-            if not self.constraints.is_initiator:
-                self.pending_fee.set_fundee_signed()
-            if self.constraints.is_initiator and self.pending_fee.is_fundee_acked():
-                self.pending_fee.set_funder_signed()
+        for pending_fee in self.fee_mgr:
+            if pending_fee.is_proposed():
+                if not self.constraints.is_initiator:
+                    pending_fee.set_fundee_signed()
+                if self.constraints.is_initiator and pending_fee.is_fundee_acked():
+                    pending_fee.set_funder_signed()
 
         if self.lnwatcher:
             self.lnwatcher.process_new_offchain_ctx(self, pending_remote_commitment, ours=False)
@@ -338,11 +337,12 @@ class HTLCStateMachine(PrintError):
 
         # TODO check htlc in htlcs_in_local
 
-        if self.pending_fee.is_proposed():
-            if not self.constraints.is_initiator:
-                self.pending_fee.set_fundee_signed()
-            if self.constraints.is_initiator and self.pending_fee.is_fundee_acked():
-                self.pending_fee.set_funder_signed()
+        for pending_fee in self.fee_mgr:
+            if pending_fee.is_proposed():
+                if not self.constraints.is_initiator:
+                    pending_fee.set_fundee_signed()
+                if self.constraints.is_initiator and pending_fee.is_fundee_acked():
+                    pending_fee.set_funder_signed()
 
         if self.lnwatcher:
             self.lnwatcher.process_new_offchain_ctx(self, pending_local_commitment, ours=True)
@@ -366,15 +366,16 @@ class HTLCStateMachine(PrintError):
         new_local_feerate = self.local_state.feerate
         new_remote_feerate = self.remote_state.feerate
 
-        if self.pending_fee is not None:
-            if not self.constraints.is_initiator and self.pending_fee.is_fundee_signed():
-                new_local_feerate = new_remote_feerate = self.pending_fee.rate
-                self.pending_fee.clear()
-                print("FEERATE CHANGE COMPLETE (non-initiator)")
-            if self.constraints.is_initiator and self.pending_fee.is_funder_signed():
-                new_local_feerate = new_remote_feerate = self.pending_fee.rate
-                self.pending_fee.clear()
-                print("FEERATE CHANGE COMPLETE (initiator)")
+        for pending_fee in self.fee_mgr:
+            if pending_fee is not None:
+                if not self.constraints.is_initiator and pending_fee.is_fundee_signed():
+                    new_local_feerate = new_remote_feerate = pending_fee.rate
+                    pending_fee.clear()
+                    print("FEERATE CHANGE COMPLETE (non-initiator)")
+                if self.constraints.is_initiator and pending_fee.is_funder_signed():
+                    new_local_feerate = new_remote_feerate = pending_fee.rate
+                    pending_fee.clear()
+                    print("FEERATE CHANGE COMPLETE (initiator)")
 
         self.local_state=self.local_state._replace(
             ctn=self.local_state.ctn + 1,
@@ -458,9 +459,10 @@ class HTLCStateMachine(PrintError):
             amount_msat = self.local_state.amount_msat + (received_this_batch - sent_this_batch)
         )
 
-        if self.pending_fee.is_proposed():
-            if self.constraints.is_initiator:
-                self.pending_fee.set_fundee_acked()
+        for pending_fee in self.fee_mgr:
+            if pending_fee.is_proposed():
+                if self.constraints.is_initiator:
+                    pending_fee.set_fundee_acked()
 
         self.local_commitment = self.pending_local_commitment
         self.remote_commitment = self.pending_remote_commitment
@@ -486,6 +488,17 @@ class HTLCStateMachine(PrintError):
         return remote_msat, local_msat
 
     @property
+    def pending_remote_feerate(self):
+        candidate = None
+        for pending_fee in self.fee_mgr:
+            x = pending_fee.pending_remote_feerate
+            if x is not None:
+                candidate = x
+
+        feerate = candidate if candidate is not None else self.remote_state.feerate
+        return feerate
+
+    @property
     def pending_remote_commitment(self):
         remote_msat, local_msat = self.amounts()
         assert local_msat >= 0
@@ -497,7 +510,7 @@ class HTLCStateMachine(PrintError):
         local_htlc_pubkey = derive_pubkey(self.local_config.htlc_basepoint.pubkey, this_point)
         local_revocation_pubkey = derive_blinded_pubkey(self.local_config.revocation_basepoint.pubkey, this_point)
 
-        feerate = self.pending_fee.pending_remote_feerate
+        feerate = self.pending_remote_feerate
 
         htlcs_in_local = []
         for htlc in self.htlcs_in_local:
@@ -519,6 +532,17 @@ class HTLCStateMachine(PrintError):
         return commit
 
     @property
+    def pending_local_feerate(self):
+        candidate = None
+        for pending_fee in self.fee_mgr:
+            x = pending_fee.pending_local_feerate
+            if x is not None:
+                candidate = x
+
+        feerate = candidate if candidate is not None else self.local_state.feerate
+        return feerate
+
+    @property
     def pending_local_commitment(self):
         remote_msat, local_msat = self.amounts()
         assert local_msat >= 0
@@ -530,7 +554,7 @@ class HTLCStateMachine(PrintError):
         local_htlc_pubkey = derive_pubkey(self.local_config.htlc_basepoint.pubkey, this_point)
         remote_revocation_pubkey = derive_blinded_pubkey(self.remote_config.revocation_basepoint.pubkey, this_point)
 
-        feerate = self.pending_fee.pending_local_feerate
+        feerate = self.pending_local_feerate
 
         htlcs_in_local = []
         for htlc in self.htlcs_in_local:
@@ -623,14 +647,18 @@ class HTLCStateMachine(PrintError):
     def update_fee(self, fee):
         if not self.constraints.is_initiator:
             raise Exception("only initiator can update_fee, this counterparty is not initiator")
-        self.pending_fee.rate = fee
-        self.pending_fee.proposed = self.local_state.ctn
+        pending_fee = FeeUpdate(self)
+        self.fee_mgr.append(pending_fee)
+        pending_fee.rate = fee
+        pending_fee.proposed = self.local_state.ctn
 
     def receive_update_fee(self, fee):
         if self.constraints.is_initiator:
             raise Exception("only the non-initiator can receive_update_fee, this counterparty is initiator")
-        self.pending_fee.rate = fee
-        self.pending_fee.proposed = self.remote_state.ctn
+        pending_fee = FeeUpdate(self)
+        self.fee_mgr.append(pending_fee)
+        pending_fee.rate = fee
+        pending_fee.proposed = self.remote_state.ctn
 
     def to_save(self):
         return {
@@ -686,7 +714,7 @@ class HTLCStateMachine(PrintError):
             local_msat,
             remote_msat,
             conf.dust_limit_sat,
-            chan.pending_fee.pending_local_feerate if for_us else chan.pending_fee.pending_remote_feerate,
+            chan.pending_local_feerate if for_us else chan.pending_remote_feerate,
             for_us,
             chan.constraints.is_initiator,
             htlcs=htlcs)

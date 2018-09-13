@@ -249,7 +249,7 @@ def make_htlc_tx_with_open_channel(chan, pcp, for_us, we_receive, amount_msat, c
     is_htlc_success = for_us == we_receive
     htlc_tx_output = make_htlc_tx_output(
         amount_msat = amount_msat,
-        local_feerate = chan.pending_fee.pending_local_feerate if for_us else chan.pending_fee.pending_remote_feerate,
+        local_feerate = chan.pending_local_feerate if for_us else chan.pending_remote_feerate,
         revocationpubkey=revocation_pubkey,
         local_delayedpubkey=delayedpubkey,
         success = is_htlc_success,
